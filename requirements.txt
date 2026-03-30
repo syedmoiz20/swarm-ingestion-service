@@ -1,0 +1,6 @@
+fastapi
+google-cloud-bigquery
+google-cloud-pubsub
+pydantic
+python-dotenv
+uvicorn
