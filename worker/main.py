@@ -1,4 +1,7 @@
 import logging
+import signal
+from concurrent.futures import CancelledError
+from types import FrameType
 
 from google.cloud import pubsub_v1
 from google.cloud.pubsub_v1.subscriber.message import Message
@@ -7,7 +10,10 @@ from shared.config import get_settings
 from shared.schemas import AnalyticsEvent
 from worker.bigquery_client import BigQueryInsertError, BigQueryWriter
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 
@@ -44,12 +50,32 @@ class EventSubscriberWorker:
             callback=self.handle_message,
         )
 
+        def request_shutdown(signum: int, _frame: FrameType | None) -> None:
+            logger.info("Shutdown signal received: %s", signum)
+            streaming_pull_future.cancel()
+
+        for shutdown_signal in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(shutdown_signal, request_shutdown)
+
         try:
             streaming_pull_future.result()
+        except CancelledError:
+            logger.info("Worker shutdown complete.")
         except KeyboardInterrupt:
             streaming_pull_future.cancel()
             logger.info("Worker shutdown requested.")
+        except Exception:
+            logger.exception("Worker terminated unexpectedly.")
+            streaming_pull_future.cancel()
+            raise
+        finally:
+            self.subscriber.close()
+
+
+def main() -> None:
+    logger.info("Starting subscriber worker.")
+    EventSubscriberWorker().run()
 
 
 if __name__ == "__main__":
-    EventSubscriberWorker().run()
+    main()
